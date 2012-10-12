@@ -65,6 +65,7 @@ object QueryCompiler {
     Phase.rewriteOrderBy,
     Phase.letDynamicEliminated,
     Phase.assignUniqueSymbols,
+    Phase.assignTypes,
     // Columnizer
     Phase.forceOuterBinds,
     Phase.expandTables,
@@ -110,6 +111,7 @@ object Phase {
   val rewriteOrderBy = new RewriteOrderBy
   val letDynamicEliminated = new LetDynamicEliminated
   val assignUniqueSymbols = new AssignUniqueSymbols
+  val assignTypes = new AssignTypes
   val forceOuterBinds = new ForceOuterBinds
   val expandTables = new ExpandTables
   val expandRefs = new ExpandRefs

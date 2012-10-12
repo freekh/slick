@@ -109,7 +109,7 @@ class ExpandTables extends Phase {
     case t: TableNode =>
       val sym = new AnonSymbol
       val expanded = WithOp.encodeRef(t, sym).nodeShaped_*.packedNode
-      val processed = apply(state.compiler.runBefore(Phase.forceOuterBinds, expanded, state), state)
+      val processed = apply(state.compiler.runBefore(Phase.assignTypes, expanded, state), state)
       TableExpansion(sym, t, ProductNode(processed.flattenProduct))
     case n => n.nodeMapChildren(ch => apply(ch, state))
   }

@@ -2,9 +2,9 @@ package scala.slick.lifted
 
 import scala.slick.driver.JdbcDriver
 import scala.slick.jdbc.{PositionedParameters, PositionedResult}
-import scala.slick.ast.{Node, UnaryNode, ProductNode, TypedType, MappedScalaType, Scope}
+import scala.slick.ast.{Node, UnaryNode, ProductNode, TypedType, MappedScalaType, Scope, ProductType, TypedNode}
 
-sealed trait Projection[T <: Product] extends ColumnBase[T] with ProductNode with Product {
+sealed trait Projection[T <: Product] extends ColumnBase[T] with ProductNode with Product with TypedNode {
   type V = T
   lazy val nodeChildren = productIterator.map(Node(_)).toIndexedSeq
 
@@ -29,6 +29,10 @@ sealed trait Projection[T <: Product] extends ColumnBase[T] with ProductNode wit
   def <>[R](f: (T => R), g: (R => Option[T])) = MappedProjection[R, T](this, f, g)(this)
 
   override def toString = "Projection" + productArity
+
+  lazy val tpe = ProductType(productIterator.asInstanceOf[Iterator[Column[_]]].map(_.tpe).toIndexedSeq)
+
+  override protected[this] def nodeComputeType(scope: Scope) = tpe
 }
 
 object Projection {
@@ -37,7 +41,7 @@ object Projection {
 </#list>
 }
 
-final case class MappedProjection[T, P <: Product](child: Node, f: (P => T), g: (T => Option[P]))(proj: Projection[P]) extends ColumnBase[T] with UnaryNode {
+final case class MappedProjection[T, P <: Product](child: Node, f: (P => T), g: (T => Option[P]))(proj: Projection[P]) extends ColumnBase[T] with UnaryNode with TypedNode {
   override def toString = "MappedProjection"
   override def nodeDelegate = if(op eq null) Node(child) else op.nodeDelegate
   def getAllColumnTypedTypes = proj.getAllColumnTypedTypes
@@ -55,8 +59,8 @@ final case class MappedProjection[T, P <: Product](child: Node, f: (P => T), g: 
     case m: MappedProjection[_,_] => child == m.child && f == m.f && g == m.g
     case _ => false
   }
-  protected[this] def nodeComputeType(scope: Scope): MappedScalaType = new MappedScalaType {
-    val baseType =  proj.nodeGetType(scope)
+  lazy val tpe: MappedScalaType = new MappedScalaType {
+    val baseType =  proj.tpe
     def toBase(v: Any): Any = Some(g(v.asInstanceOf[T]))
     def toMapped(v: Any): Any = f(v.asInstanceOf[P])
   }

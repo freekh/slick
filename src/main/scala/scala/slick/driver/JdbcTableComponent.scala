@@ -25,10 +25,14 @@ trait JdbcTableComponent { driver: JdbcDriver =>
     val O: driver.columnOptions.type = columnOptions
 
     def column[C](n: String, options: ColumnOption[C]*)(implicit tm: TypedType[C]): Column[C] = new Column[C] {
-      override def nodeDelegate = Select(Node(table) match {
-        case r: Ref => r
-        case _ => Ref(Node(table).nodeIntrinsicSymbol)
-      }, FieldSymbol(n)(options, tm))
+      override def nodeDelegate = {
+        val sel = Select(Node(table) match {
+          case r: Ref => r
+          case _ => Ref(Node(table).nodeIntrinsicSymbol)
+        }, FieldSymbol(n)(options, tm))
+        sel.nodeAssignType(tm)
+        sel
+      }
       override def toString = (Node(table) match {
         case r: Ref => "(" + _tableName + " " + r.sym.name + ")"
         case _ => _tableName
@@ -46,7 +50,6 @@ trait JdbcTableComponent { driver: JdbcDriver =>
 
     def ddl: DDL = driver.buildTableDDL(this)
 
-    protected[this] def nodeComputeType(scope: Scope) = *.nodeDelegate.nodeGetType(scope)
+    def tpe = CollectionType(CollectionTypeConstructor.default,  *.tpe)
   }
 }
-

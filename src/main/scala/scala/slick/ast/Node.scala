@@ -44,7 +44,7 @@ trait Node extends NodeGenerator {
 
   // Type information
   private[this] var nodeType: Type = NoType
-  final def nodeResetType: Unit = nodeType = NoType
+  final def nodeAssignType(t: Type): Unit = nodeType = t
   final def nodeCurrentType = nodeType
   final def nodeGetType(scope: Scope) = {
     if(nodeType == NoType) nodeType = nodeComputeType(scope)
@@ -87,7 +87,7 @@ trait ProductNode extends SimpleNode {
     case p: ProductNode => nodeChildren == p.nodeChildren
     case _ => false
   }
-  protected[this] def nodeComputeType(scope: Scope) = ProductType(nodeChildren.map(_.nodeGetType(scope)))
+  protected[this] def nodeComputeType(scope: Scope) = ProductType(nodeChildren.map(_.nodeGetType(scope))(collection.breakOut))
 }
 
 object ProductNode {
@@ -240,7 +240,7 @@ final case class GroupBy(fromGen: Symbol, byGen: Symbol, from: Node, by: Node) e
   def nodeGenerators = Seq((fromGen, from), (byGen, by))
   override def toString = "GroupBy"
   protected[this] def nodeComputeType(scope: Scope) = from.nodeGetType(scope) match {
-    case c @ CollectionType(cons, _) => CollectionType(cons, ProductType(Seq(by.nodeGetType(scope + (fromGen, from) + (byGen, by)), c)))
+    case c @ CollectionType(cons, _) => CollectionType(cons, ProductType(IndexedSeq(by.nodeGetType(scope + (fromGen, from) + (byGen, by)), c)))
     case _ => throw new SlickException("GroupBy generator must have a CollectionType")
   }
 }
@@ -273,7 +273,7 @@ final case class Join(leftGen: Symbol, rightGen: Symbol, left: Node, right: Node
     if((leftGen eq this.leftGen) && (rightGen eq this.rightGen) && (left eq this.left) && (right eq this.right) && (jt eq this.jt)) this
     else copy(leftGen = leftGen, rightGen = rightGen, left = left, right = right, jt = jt)
   }
-  protected[this] def nodeComputeType(scope: Scope) = ProductType(Seq(left.nodeGetType(scope), right.nodeGetType(scope)))
+  protected[this] def nodeComputeType(scope: Scope) = ProductType(IndexedSeq(left.nodeGetType(scope), right.nodeGetType(scope)))
 }
 
 final case class Union(left: Node, right: Node, all: Boolean, leftGen: Symbol = new AnonSymbol, rightGen: Symbol = new AnonSymbol) extends BinaryNode with SimpleDefNode {
@@ -335,10 +335,7 @@ final case class Select(in: Node, field: Symbol) extends UnaryNode with SimpleRe
     case Some(l) => super.toString + " for " + Path.toString(l)
     case None => super.toString
   }
-  protected[this] def nodeComputeType(scope: Scope) = in.nodeGetType(scope) match {
-    case t: StructType => t.select(field)
-    case t => throw new SlickException("Field "+field+" not found in type "+t)
-  }
+  protected[this] def nodeComputeType(scope: Scope) = Type.select(in.nodeGetType(scope), field)
 }
 
 case class Apply(sym: Symbol, children: Seq[Node])(val tpe: Type) extends SimpleNode with SimpleRefNode with TypedNode {

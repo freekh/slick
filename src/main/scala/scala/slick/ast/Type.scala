@@ -1,17 +1,28 @@
 package scala.slick.ast
 
+import scala.slick.SlickException
+
 /** Super-trait for all types */
 trait Type
 
-trait StructType extends Type {
-  def select(sym: Symbol): Type
+object Type {
+  def select(tpe: Type, sym: Symbol): Type = (tpe, sym) match {
+    case (StructType(es), _) => es.find(x => x._1 == sym).map(_._2).
+      getOrElse(throw new SlickException("No type for symbol "+sym+" found in "+tpe))
+    case (ProductType(es), ElementSymbol(i)) if i <= es.length => es(i-1)
+    case _ => throw new SlickException("No type for symbol "+sym+" found in "+tpe)
+  }
 }
+
+case class StructType(elements: Seq[(Symbol, Type)]) extends Type
 
 trait OptionType extends Type {
   def elementType: Type
 }
 
-case class ProductType(elements: Seq[Type]) extends Type
+case class ProductType(elements: IndexedSeq[Type]) extends Type {
+  override def toString = "ProductType(" + elements.mkString(", ") + ")"
+}
 
 case class CollectionType(cons: CollectionTypeConstructor, elementType: Type) extends Type
 

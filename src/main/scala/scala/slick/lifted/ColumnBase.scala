@@ -14,7 +14,7 @@ trait Rep[T] extends NodeGenerator with WithOp { self: ValueLinearizer[T] => }
 /** Common base trait for record values
   * (anything that is isomorphic to a tuple of scalar values).
   */
-trait ColumnBase[T] extends Rep[T] with RecordLinearizer[T]
+trait ColumnBase[T] extends Rep[T] with RecordLinearizer[T] with Typed
 
 /** Base classs for columns.
   */

@@ -5,7 +5,7 @@ import scala.slick.jdbc.{PositionedParameters, PositionedResult}
 import scala.slick.ast._
 import scala.slick.ast.Util.nodeToNodeOps
 
-abstract class AbstractTable[T](val schemaName: Option[String], val tableName: String) extends TableNode with ColumnBase[T] with NullaryNode with WithOp {
+abstract class AbstractTable[T](val schemaName: Option[String], val tableName: String) extends TableNode with ColumnBase[T] with NullaryNode with WithOp with TypedNode {
 
   def * : ColumnBase[T]
   def nodeShaped_* : ShapedValue[_, _] = ShapedValue(*, implicitly[Shape[ColumnBase[T], _, _]])

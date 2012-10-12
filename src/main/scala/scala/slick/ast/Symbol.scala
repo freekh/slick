@@ -13,7 +13,7 @@ trait Symbol {
 /** A named symbol which refers to an (aliased or unaliased) field. */
 case class FieldSymbol(name: String)(val options: Seq[ColumnOption[_]], val tpe: Type) extends Symbol with Typed
 
-/** An element of a ProductNode */
+/** An element of a ProductNode (using a 1-based index) */
 case class ElementSymbol(idx: Int) extends Symbol {
   def name = "_" + idx
 }
