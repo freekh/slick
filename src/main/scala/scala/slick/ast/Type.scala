@@ -21,7 +21,13 @@ object CollectionTypeConstructor {
   def default = new CollectionTypeConstructor
 }
 
-object NoType extends Type
+trait MappedScalaType extends Type {
+  def baseType: Type
+  def toMapped(v: Any): Any
+  def toBase(v: Any): Any
+}
+
+case object NoType extends Type
 
 /** Something that has a type */
 trait Typed {

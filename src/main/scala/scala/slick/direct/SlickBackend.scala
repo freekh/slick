@@ -100,6 +100,7 @@ class SlickBackend( val driver: JdbcDriver, mapper:Mapper ) extends QueryableBac
       def columns = getConstructorArgs( typetag.tpe ).map{extractColumn(_,sq.Node(this))} // use def here, not val, so expansion is still correct after cloning
 
       def nodeShaped_* = ShapedValue(sq.ProductNode(columns), Shape.selfLinearizingShape.asInstanceOf[Shape[sq.ProductNode, Any, _]])
+      protected[this] def nodeComputeType(scope: sq.Scope) = sq.NoType
     }
     new Query( table, Scope() )
   }

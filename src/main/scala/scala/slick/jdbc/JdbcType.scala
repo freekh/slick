@@ -58,6 +58,13 @@ trait JdbcType[T] extends TypedType[T] { self =>
     override def valueToSQLLiteral(value: Option[T]): String = value.map(self.valueToSQLLiteral).getOrElse("null")
     override def nullable = true
   }
+
+  override def toString = {
+    def cln = getClass.getName
+    val pos = cln.lastIndexOf("$JdbcTypes$")
+    val s = if(pos >= 0) cln.substring(pos+11) else cln
+    s + ":" + sqlTypeName
+  }
 }
 
 object JdbcType {

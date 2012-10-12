@@ -2,7 +2,7 @@ package scala.slick.lifted
 
 import scala.slick.driver.JdbcDriver
 import scala.slick.jdbc.{PositionedParameters, PositionedResult}
-import scala.slick.ast.{Node, UnaryNode, ProductNode, TypedType}
+import scala.slick.ast.{Node, UnaryNode, ProductNode, TypedType, MappedScalaType, Scope}
 
 sealed trait Projection[T <: Product] extends ColumnBase[T] with ProductNode with Product {
   type V = T
@@ -54,6 +54,11 @@ final case class MappedProjection[T, P <: Product](child: Node, f: (P => T), g: 
   override def equals(o: Any) = o match {
     case m: MappedProjection[_,_] => child == m.child && f == m.f && g == m.g
     case _ => false
+  }
+  protected[this] def nodeComputeType(scope: Scope): MappedScalaType = new MappedScalaType {
+    val baseType =  proj.nodeGetType(scope)
+    def toBase(v: Any): Any = Some(g(v.asInstanceOf[T]))
+    def toMapped(v: Any): Any = f(v.asInstanceOf[P])
   }
 }
 

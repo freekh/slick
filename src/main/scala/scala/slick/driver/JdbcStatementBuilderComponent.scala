@@ -339,6 +339,7 @@ trait JdbcStatementBuilderComponent { driver: JdbcDriver =>
   trait RowNumberPagination extends QueryBuilder {
     case class StarAnd(child: Node) extends UnaryNode {
       protected[this] def nodeRebuild(child: Node): Node = StarAnd(child)
+      protected[this] def nodeComputeType(scope: Scope) = NoType
     }
 
     override def expr(c: Node, skipParens: Boolean = false): Unit = c match {

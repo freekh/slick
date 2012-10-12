@@ -45,6 +45,8 @@ trait JdbcTableComponent { driver: JdbcDriver =>
     }
 
     def ddl: DDL = driver.buildTableDDL(this)
+
+    protected[this] def nodeComputeType(scope: Scope) = *.nodeDelegate.nodeGetType(scope)
   }
 }
 

@@ -41,6 +41,16 @@ trait Node extends NodeGenerator {
   }
 
   def nodeIntrinsicSymbol = new IntrinsicSymbol(this)
+
+  // Type information
+  private[this] var nodeType: Type = NoType
+  final def nodeResetType: Unit = nodeType = NoType
+  final def nodeCurrentType = nodeType
+  final def nodeGetType(scope: Scope) = {
+    if(nodeType == NoType) nodeType = nodeComputeType(scope)
+    nodeType
+  }
+  protected[this] def nodeComputeType(scope: Scope): Type
 }
 
 trait SimpleNode extends Node {
@@ -50,7 +60,9 @@ trait SimpleNode extends Node {
     nodeMapNodes(nodeChildren, f).map(nodeRebuild).getOrElse(this)
 }
 
-trait TypedNode extends Node with Typed
+trait TypedNode extends Node with Typed {
+  protected[this] def nodeComputeType(scope: Scope) = tpe
+}
 
 object Node {
   def apply(o:Any): Node =
@@ -75,6 +87,7 @@ trait ProductNode extends SimpleNode {
     case p: ProductNode => nodeChildren == p.nodeChildren
     case _ => false
   }
+  protected[this] def nodeComputeType(scope: Scope) = ProductType(nodeChildren.map(_.nodeGetType(scope)))
 }
 
 object ProductNode {
@@ -137,6 +150,7 @@ final case class Pure(value: Node) extends UnaryNode {
   def child = value
   override def nodeChildNames = Seq("value")
   protected[this] def nodeRebuild(child: Node) = copy(value = child)
+  protected[this] def nodeComputeType(scope: Scope) = CollectionType(CollectionTypeConstructor.default, child.nodeGetType(scope))
 }
 
 abstract class FilteredQuery extends Node with DefNode {
@@ -158,6 +172,7 @@ abstract class FilteredQuery extends Node with DefNode {
       if(args.isEmpty) n else (n + ' ' + args)
     case _ => super.toString
   }
+  protected[this] def nodeComputeType(scope: Scope) = from.nodeGetType(scope)
 }
 
 object FilteredQuery {
@@ -224,6 +239,10 @@ final case class GroupBy(fromGen: Symbol, byGen: Symbol, from: Node, by: Node) e
   def nodePostGeneratorChildren = Nil
   def nodeGenerators = Seq((fromGen, from), (byGen, by))
   override def toString = "GroupBy"
+  protected[this] def nodeComputeType(scope: Scope) = from.nodeGetType(scope) match {
+    case c @ CollectionType(cons, _) => CollectionType(cons, ProductType(Seq(by.nodeGetType(scope + (fromGen, from) + (byGen, by)), c)))
+    case _ => throw new SlickException("GroupBy generator must have a CollectionType")
+  }
 }
 
 final case class Take(from: Node, num: Int, generator: Symbol = new AnonSymbol) extends FilteredQuery with UnaryNode with SimpleDefNode {
@@ -254,6 +273,7 @@ final case class Join(leftGen: Symbol, rightGen: Symbol, left: Node, right: Node
     if((leftGen eq this.leftGen) && (rightGen eq this.rightGen) && (left eq this.left) && (right eq this.right) && (jt eq this.jt)) this
     else copy(leftGen = leftGen, rightGen = rightGen, left = left, right = right, jt = jt)
   }
+  protected[this] def nodeComputeType(scope: Scope) = ProductType(Seq(left.nodeGetType(scope), right.nodeGetType(scope)))
 }
 
 final case class Union(left: Node, right: Node, all: Boolean, leftGen: Symbol = new AnonSymbol, rightGen: Symbol = new AnonSymbol) extends BinaryNode with SimpleDefNode {
@@ -263,6 +283,7 @@ final case class Union(left: Node, right: Node, all: Boolean, leftGen: Symbol = 
   def nodeGenerators = Seq((leftGen, left), (rightGen, right))
   def nodeRebuildWithGenerators(gen: IndexedSeq[Symbol]) = copy(leftGen = gen(0), rightGen = gen(1))
   def nodePostGeneratorChildren = Seq.empty
+  protected[this] def nodeComputeType(scope: Scope) = right.nodeGetType(scope)
 }
 
 final case class Bind(generator: Symbol, from: Node, select: Node) extends BinaryNode with SimpleDefNode {
@@ -274,6 +295,10 @@ final case class Bind(generator: Symbol, from: Node, select: Node) extends Binar
   override def toString = "Bind"
   def nodeRebuildWithGenerators(gen: IndexedSeq[Symbol]) = copy(generator = gen(0))
   def nodePostGeneratorChildren = Seq(select)
+  protected[this] def nodeComputeType(scope: Scope) = (from.nodeGetType(scope), select.nodeGetType(scope + (generator, from))) match {
+    case (CollectionType(cons, _), CollectionType(_, elem)) => CollectionType(cons, elem)
+    case _ => throw new SlickException("Bind children must have CollectionType")
+  }
 }
 
 final case class TableExpansion(generator: Symbol, table: Node, columns: Node) extends BinaryNode with SimpleDefNode {
@@ -285,6 +310,7 @@ final case class TableExpansion(generator: Symbol, table: Node, columns: Node) e
   override def toString = "TableExpansion"
   def nodeRebuildWithGenerators(gen: IndexedSeq[Symbol]) = copy(generator = gen(0))
   def nodePostGeneratorChildren = Seq(columns)
+  protected[this] def nodeComputeType(scope: Scope) = columns.nodeGetType(scope + (generator, table))
 }
 
 final case class TableRefExpansion(marker: Symbol, ref: Node, columns: Node) extends BinaryNode with SimpleDefNode {
@@ -296,6 +322,7 @@ final case class TableRefExpansion(marker: Symbol, ref: Node, columns: Node) ext
   override def toString = "TableRefExpansion "+marker
   def nodeRebuildWithGenerators(gen: IndexedSeq[Symbol]) = copy(marker = gen(0))
   def nodePostGeneratorChildren = Seq(columns)
+  protected[this] def nodeComputeType(scope: Scope) = columns.nodeGetType(scope + (marker, ref))
 }
 
 final case class Select(in: Node, field: Symbol) extends UnaryNode with SimpleRefNode {
@@ -308,30 +335,28 @@ final case class Select(in: Node, field: Symbol) extends UnaryNode with SimpleRe
     case Some(l) => super.toString + " for " + Path.toString(l)
     case None => super.toString
   }
+  protected[this] def nodeComputeType(scope: Scope) = in.nodeGetType(scope) match {
+    case t: StructType => t.select(field)
+    case t => throw new SlickException("Field "+field+" not found in type "+t)
+  }
 }
 
-case class Apply(sym: Symbol, children: Seq[Node]) extends SimpleNode with SimpleRefNode {
+case class Apply(sym: Symbol, children: Seq[Node])(val tpe: Type) extends SimpleNode with SimpleRefNode with TypedNode {
   def nodeChildren = children
-  protected[this] def nodeRebuild(ch: IndexedSeq[scala.slick.ast.Node]) = copy(children = ch)
+  protected[this] def nodeRebuild(ch: IndexedSeq[scala.slick.ast.Node]) = copy(children = ch)(tpe)
   def nodeReferences: Seq[Symbol] = Seq(sym)
-  def nodeRebuildWithReferences(syms: IndexedSeq[Symbol]) = copy(sym = syms(0))
+  def nodeRebuildWithReferences(syms: IndexedSeq[Symbol]) = copy(sym = syms(0))(tpe)
   override def toString = "Apply "+sym
-}
-
-object Apply {
-  /** Create a typed Apply */
-  def apply(sym: Symbol, children: Seq[Node], tp: Type): Apply with TypedNode =
-    new Apply(sym, children) with TypedNode {
-      def tpe = tp
-      override protected[this] def nodeRebuild(ch: IndexedSeq[scala.slick.ast.Node]) = Apply(sym, ch, tp)
-      override def nodeRebuildWithReferences(syms: IndexedSeq[Symbol]) = Apply(syms(0), children, tp)
-    }
 }
 
 /** A reference to a Symbol */
 case class Ref(sym: Symbol) extends NullaryNode with SimpleRefNode {
   def nodeReferences = Seq(sym)
   def nodeRebuildWithReferences(gen: IndexedSeq[Symbol]) = copy(sym = gen(0))
+  protected[this] def nodeComputeType(scope: Scope) = scope.get(sym) match {
+    case Some((n, sc)) => n.nodeGetType(sc)
+    case _ => throw new SlickException("No definition for symbol "+sym+" found for "+this)
+  }
 }
 
 /** A constructor/extractor for nested Selects starting at a Ref */
@@ -373,19 +398,26 @@ final case class LetDynamic(defs: Seq[(Symbol, Node)], in: Node) extends SimpleN
   def nodeRebuildWithGenerators(gen: IndexedSeq[Symbol]): Node =
     copy(defs = (defs, gen).zipped.map((e, s) => (s, e._2)))
   override def toString = "LetDynamic"
+  protected[this] def nodeComputeType(scope: Scope) =
+    in.nodeGetType(defs.foldLeft(scope){ case (sc, (s, n)) => sc + (s, n) })
 }
 
-final case class SequenceNode(name: String)(val increment: Long) extends NullaryNode
+final case class SequenceNode(name: String)(val increment: Long) extends NullaryNode with TypedNode {
+  def tpe = StaticType.Long
+}
 
 /** A Query of this special Node represents an infinite stream of consecutive
   * numbers starting at the given number. This is used as an operand for
   * zipWithIndex. It is not exposed directly in the query language because it
   * cannot be represented in SQL outside of a 'zip' operation. */
-final case class RangeFrom(start: Long = 1L) extends NullaryNode
+final case class RangeFrom(start: Long = 1L) extends NullaryNode with TypedNode {
+  def tpe = StaticType.Long
+}
 
 /** An if-then part of a Conditional node */
 final case class IfThen(val left: Node, val right: Node) extends BinaryNode {
   protected[this] def nodeRebuild(left: Node, right: Node): Node = copy(left = left, right = right)
+  protected[this] def nodeComputeType(scope: Scope) = right.nodeGetType(scope)
 }
 
 /** A conditional expression; all clauses should be IfThen nodes */
@@ -397,4 +429,5 @@ final case class ConditionalExpr(val clauses: IndexedSeq[Node], val elseClause: 
     if(e.ne(elseClause) || c.isDefined) ConditionalExpr(c.getOrElse(clauses), e)
     else this
   }
+  protected[this] def nodeComputeType(scope: Scope) = clauses.head.nodeGetType(scope)
 }
