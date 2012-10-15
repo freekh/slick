@@ -1,5 +1,6 @@
 package scala.slick.ast
 
+import scala.language.implicitConversions
 import scala.slick.SlickException
 
 /** Super-trait for all types */
@@ -78,4 +79,15 @@ object StaticType {
   implicit object Null extends StaticType[Null]("Null")
   implicit object String extends StaticType[String]("String")
   implicit object Unit extends StaticType[Unit]("Unit")
+}
+
+class TypeUtil(val tpe: Type) extends AnyVal {
+  def asCollectionType: CollectionType = tpe match {
+    case c: CollectionType => c
+    case _ => throw new SlickException("Expected a collection type, found "+tpe)
+  }
+}
+
+object TypeUtil {
+  implicit def typeToTypeUtil(tpe: Type) = new TypeUtil(tpe)
 }

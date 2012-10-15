@@ -4,6 +4,7 @@ import scala.slick.SlickException
 import slick.lifted.ShapedValue
 import scala.slick.util.SimpleTypeName
 import scala.collection.mutable.ArrayBuffer
+import TypeUtil.typeToTypeUtil
 
 trait NodeGenerator {
   def nodeDelegate: Node
@@ -46,11 +47,11 @@ trait Node extends NodeGenerator {
   private[this] var nodeType: Type = NoType
   final def nodeAssignType(t: Type): Unit = nodeType = t
   final def nodeCurrentType = nodeType
-  final def nodeGetType(scope: Scope) = {
+  final def nodeGetType(scope: Map[Symbol, Type]) = {
     if(nodeType == NoType) nodeType = nodeComputeType(scope)
     nodeType
   }
-  protected[this] def nodeComputeType(scope: Scope): Type
+  protected[this] def nodeComputeType(scope: Map[Symbol, Type]): Type
 }
 
 trait SimpleNode extends Node {
@@ -61,7 +62,7 @@ trait SimpleNode extends Node {
 }
 
 trait TypedNode extends Node with Typed {
-  protected[this] def nodeComputeType(scope: Scope) = tpe
+  protected[this] def nodeComputeType(scope: Map[Symbol, Type]) = tpe
 }
 
 object Node {
@@ -87,7 +88,7 @@ trait ProductNode extends SimpleNode {
     case p: ProductNode => nodeChildren == p.nodeChildren
     case _ => false
   }
-  protected[this] def nodeComputeType(scope: Scope) = ProductType(nodeChildren.map(_.nodeGetType(scope))(collection.breakOut))
+  protected[this] def nodeComputeType(scope: Map[Symbol, Type]) = ProductType(nodeChildren.map(_.nodeGetType(scope))(collection.breakOut))
 }
 
 object ProductNode {
@@ -150,7 +151,7 @@ final case class Pure(value: Node) extends UnaryNode {
   def child = value
   override def nodeChildNames = Seq("value")
   protected[this] def nodeRebuild(child: Node) = copy(value = child)
-  protected[this] def nodeComputeType(scope: Scope) = CollectionType(CollectionTypeConstructor.default, child.nodeGetType(scope))
+  protected[this] def nodeComputeType(scope: Map[Symbol, Type]) = CollectionType(CollectionTypeConstructor.default, child.nodeGetType(scope))
 }
 
 abstract class FilteredQuery extends Node with DefNode {
@@ -172,7 +173,7 @@ abstract class FilteredQuery extends Node with DefNode {
       if(args.isEmpty) n else (n + ' ' + args)
     case _ => super.toString
   }
-  protected[this] def nodeComputeType(scope: Scope) = from.nodeGetType(scope)
+  protected[this] def nodeComputeType(scope: Map[Symbol, Type]) = from.nodeGetType(scope)
 }
 
 object FilteredQuery {
@@ -239,9 +240,11 @@ final case class GroupBy(fromGen: Symbol, byGen: Symbol, from: Node, by: Node) e
   def nodePostGeneratorChildren = Nil
   def nodeGenerators = Seq((fromGen, from), (byGen, by))
   override def toString = "GroupBy"
-  protected[this] def nodeComputeType(scope: Scope) = from.nodeGetType(scope) match {
-    case c @ CollectionType(cons, _) => CollectionType(cons, ProductType(IndexedSeq(by.nodeGetType(scope + (fromGen, from) + (byGen, by)), c)))
-    case _ => throw new SlickException("GroupBy generator must have a CollectionType")
+  protected[this] def nodeComputeType(scope: Map[Symbol, Type]) = {
+    val fromType = from.nodeGetType(scope).asCollectionType
+    val byScope = scope + (fromGen -> fromType.elementType)
+    val byType = by.nodeGetType(byScope)
+    CollectionType(fromType.cons, ProductType(IndexedSeq(byType, CollectionType(CollectionTypeConstructor.default, fromType.elementType))))
   }
 }
 
@@ -273,7 +276,7 @@ final case class Join(leftGen: Symbol, rightGen: Symbol, left: Node, right: Node
     if((leftGen eq this.leftGen) && (rightGen eq this.rightGen) && (left eq this.left) && (right eq this.right) && (jt eq this.jt)) this
     else copy(leftGen = leftGen, rightGen = rightGen, left = left, right = right, jt = jt)
   }
-  protected[this] def nodeComputeType(scope: Scope) = ProductType(IndexedSeq(left.nodeGetType(scope), right.nodeGetType(scope)))
+  protected[this] def nodeComputeType(scope: Map[Symbol, Type]) = ProductType(IndexedSeq(left.nodeGetType(scope), right.nodeGetType(scope)))
 }
 
 final case class Union(left: Node, right: Node, all: Boolean, leftGen: Symbol = new AnonSymbol, rightGen: Symbol = new AnonSymbol) extends BinaryNode with SimpleDefNode {
@@ -283,7 +286,7 @@ final case class Union(left: Node, right: Node, all: Boolean, leftGen: Symbol = 
   def nodeGenerators = Seq((leftGen, left), (rightGen, right))
   def nodeRebuildWithGenerators(gen: IndexedSeq[Symbol]) = copy(leftGen = gen(0), rightGen = gen(1))
   def nodePostGeneratorChildren = Seq.empty
-  protected[this] def nodeComputeType(scope: Scope) = right.nodeGetType(scope)
+  protected[this] def nodeComputeType(scope: Map[Symbol, Type]) = right.nodeGetType(scope)
 }
 
 final case class Bind(generator: Symbol, from: Node, select: Node) extends BinaryNode with SimpleDefNode {
@@ -295,9 +298,10 @@ final case class Bind(generator: Symbol, from: Node, select: Node) extends Binar
   override def toString = "Bind"
   def nodeRebuildWithGenerators(gen: IndexedSeq[Symbol]) = copy(generator = gen(0))
   def nodePostGeneratorChildren = Seq(select)
-  protected[this] def nodeComputeType(scope: Scope) = (from.nodeGetType(scope), select.nodeGetType(scope + (generator, from))) match {
-    case (CollectionType(cons, _), CollectionType(_, elem)) => CollectionType(cons, elem)
-    case _ => throw new SlickException("Bind children must have CollectionType")
+  protected[this] def nodeComputeType(scope: Map[Symbol, Type]) = {
+    val fromType = from.nodeGetType(scope).asCollectionType
+    val selType = select.nodeGetType(scope + (generator -> fromType.elementType))
+    CollectionType(fromType.cons, selType.asCollectionType.elementType)
   }
 }
 
@@ -310,7 +314,8 @@ final case class TableExpansion(generator: Symbol, table: Node, columns: Node) e
   override def toString = "TableExpansion"
   def nodeRebuildWithGenerators(gen: IndexedSeq[Symbol]) = copy(generator = gen(0))
   def nodePostGeneratorChildren = Seq(columns)
-  protected[this] def nodeComputeType(scope: Scope) = columns.nodeGetType(scope + (generator, table))
+  protected[this] def nodeComputeType(scope: Map[Symbol, Type]) =
+    columns.nodeGetType(scope + (generator -> table.nodeGetType(scope)))
 }
 
 final case class TableRefExpansion(marker: Symbol, ref: Node, columns: Node) extends BinaryNode with SimpleDefNode {
@@ -322,7 +327,8 @@ final case class TableRefExpansion(marker: Symbol, ref: Node, columns: Node) ext
   override def toString = "TableRefExpansion "+marker
   def nodeRebuildWithGenerators(gen: IndexedSeq[Symbol]) = copy(marker = gen(0))
   def nodePostGeneratorChildren = Seq(columns)
-  protected[this] def nodeComputeType(scope: Scope) = columns.nodeGetType(scope + (marker, ref))
+  protected[this] def nodeComputeType(scope: Map[Symbol, Type]) =
+    columns.nodeGetType(scope + (marker -> ref.nodeGetType(scope)))
 }
 
 final case class Select(in: Node, field: Symbol) extends UnaryNode with SimpleRefNode {
@@ -335,7 +341,7 @@ final case class Select(in: Node, field: Symbol) extends UnaryNode with SimpleRe
     case Some(l) => super.toString + " for " + Path.toString(l)
     case None => super.toString
   }
-  protected[this] def nodeComputeType(scope: Scope) = Type.select(in.nodeGetType(scope), field)
+  protected[this] def nodeComputeType(scope: Map[Symbol, Type]) = Type.select(in.nodeGetType(scope), field)
 }
 
 case class Apply(sym: Symbol, children: Seq[Node])(val tpe: Type) extends SimpleNode with SimpleRefNode with TypedNode {
@@ -350,9 +356,9 @@ case class Apply(sym: Symbol, children: Seq[Node])(val tpe: Type) extends Simple
 case class Ref(sym: Symbol) extends NullaryNode with SimpleRefNode {
   def nodeReferences = Seq(sym)
   def nodeRebuildWithReferences(gen: IndexedSeq[Symbol]) = copy(sym = gen(0))
-  protected[this] def nodeComputeType(scope: Scope) = scope.get(sym) match {
-    case Some((n, sc)) => n.nodeGetType(sc)
-    case _ => throw new SlickException("No definition for symbol "+sym+" found for "+this)
+  protected[this] def nodeComputeType(scope: Map[Symbol, Type]) = scope.get(sym) match {
+    case Some(t) => t
+    case _ => throw new SlickException("No type for symbol "+sym+" found for "+this)
   }
 }
 
@@ -395,8 +401,16 @@ final case class LetDynamic(defs: Seq[(Symbol, Node)], in: Node) extends SimpleN
   def nodeRebuildWithGenerators(gen: IndexedSeq[Symbol]): Node =
     copy(defs = (defs, gen).zipped.map((e, s) => (s, e._2)))
   override def toString = "LetDynamic"
-  protected[this] def nodeComputeType(scope: Scope) =
-    in.nodeGetType(defs.foldLeft(scope){ case (sc, (s, n)) => sc + (s, n) })
+  protected[this] def nodeComputeType(scope: Map[Symbol, Type]) = {
+    val defsMap = defs.toMap
+    lazy val dynScope: Map[Symbol, Type] = scope.withDefault { sym =>
+      defsMap.get(sym) match {
+        case Some(n) => n.nodeGetType(dynScope)
+        case None => throw new SlickException("Symbol "+sym+" not found")
+      }
+    }
+    in.nodeGetType(dynScope)
+  }
 }
 
 final case class SequenceNode(name: String)(val increment: Long) extends NullaryNode with TypedNode {
@@ -414,7 +428,7 @@ final case class RangeFrom(start: Long = 1L) extends NullaryNode with TypedNode 
 /** An if-then part of a Conditional node */
 final case class IfThen(val left: Node, val right: Node) extends BinaryNode {
   protected[this] def nodeRebuild(left: Node, right: Node): Node = copy(left = left, right = right)
-  protected[this] def nodeComputeType(scope: Scope) = right.nodeGetType(scope)
+  protected[this] def nodeComputeType(scope: Map[Symbol, Type]) = right.nodeGetType(scope)
 }
 
 /** A conditional expression; all clauses should be IfThen nodes */
@@ -426,5 +440,5 @@ final case class ConditionalExpr(val clauses: IndexedSeq[Node], val elseClause: 
     if(e.ne(elseClause) || c.isDefined) ConditionalExpr(c.getOrElse(clauses), e)
     else this
   }
-  protected[this] def nodeComputeType(scope: Scope) = clauses.head.nodeGetType(scope)
+  protected[this] def nodeComputeType(scope: Map[Symbol, Type]) = clauses.head.nodeGetType(scope)
 }

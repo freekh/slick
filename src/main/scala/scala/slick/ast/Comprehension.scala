@@ -1,6 +1,7 @@
 package scala.slick.ast
 
 import Util._
+import TypeUtil.typeToTypeUtil
 import scala.slick.SlickException
 
 /** A SQL comprehension */
@@ -57,19 +58,19 @@ case class Comprehension(from: Seq[(Symbol, Node)] = Seq.empty, where: Seq[Node]
       )
     else this
   }
-  protected[this] def nodeComputeType(scope: Scope) = {
-    val tc = from.head._2.nodeGetType(scope) match {
-      case CollectionType(tc, _) => tc
-      case t => throw new SlickException("First generator of Comprehension must have CollectionType (found type "+t+" for "+from.head._2+")")
-    }
+  protected[this] def nodeComputeType(scope: Map[Symbol, Type]) = {
+    val tc = from.head._2.nodeGetType(scope).asCollectionType.cons
     val el = select match {
       case None =>
-        from.last._2.nodeGetType(from.init.foldLeft(scope){ case (sc, (s, n)) => sc + (s, n) }) match {
-          case CollectionType(_, el) => el
-          case t => throw new SlickException("Last generator of Comprehension must have CollectionType (found type "+t+" for "+from.last._2+")")
+        val lastScope = from.init.foldLeft(scope) { case (sc, (s, n)) =>
+          sc + (s -> n.nodeGetType(sc).asCollectionType.elementType)
         }
+        from.last._2.nodeGetType(lastScope).asCollectionType.elementType
       case Some(sel) =>
-        sel.nodeGetType(from.foldLeft(scope){ case (sc, (s, n)) => sc + (s, n) })
+        val selScope = from.foldLeft(scope) { case (sc, (s, n)) =>
+          sc + (s -> n.nodeGetType(sc).asCollectionType.elementType)
+        }
+        sel.nodeGetType(selScope)
     }
     CollectionType(tc, el)
   }
@@ -82,5 +83,5 @@ final case class RowNumber(by: Seq[(Node, Ordering)] = Seq.empty) extends Simple
     copy(by = by.zip(ch).map{ case ((_, o), n) => (n, o) })
   override def nodeChildNames = by.zipWithIndex.map("by" + _._2)
   override def toString = "RowNumber"
-  protected[this] def nodeComputeType(scope: Scope) = NoType
+  protected[this] def nodeComputeType(scope: Map[Symbol, Type]) = NoType
 }
