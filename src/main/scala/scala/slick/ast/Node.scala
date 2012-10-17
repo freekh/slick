@@ -51,6 +51,7 @@ trait Node extends NodeGenerator {
     if(nodeType == NoType) nodeType = nodeComputeType(scope)
     nodeType
   }
+  /** Compute the type of this Node and all of its children */
   protected[this] def nodeComputeType(scope: Map[Symbol, Type]): Type
 }
 
@@ -62,7 +63,10 @@ trait SimpleNode extends Node {
 }
 
 trait TypedNode extends Node with Typed {
-  protected[this] def nodeComputeType(scope: Map[Symbol, Type]) = tpe
+  protected[this] def nodeComputeType(scope: Map[Symbol, Type]) = {
+    nodeChildren.foreach(_.nodeGetType(scope))
+    tpe
+  }
 }
 
 object Node {
@@ -88,7 +92,8 @@ trait ProductNode extends SimpleNode {
     case p: ProductNode => nodeChildren == p.nodeChildren
     case _ => false
   }
-  protected[this] def nodeComputeType(scope: Map[Symbol, Type]) = ProductType(nodeChildren.map(_.nodeGetType(scope))(collection.breakOut))
+  protected[this] def nodeComputeType(scope: Map[Symbol, Type]) =
+    ProductType(nodeChildren.map(_.nodeGetType(scope))(collection.breakOut))
 }
 
 object ProductNode {
@@ -151,7 +156,8 @@ final case class Pure(value: Node) extends UnaryNode {
   def child = value
   override def nodeChildNames = Seq("value")
   protected[this] def nodeRebuild(child: Node) = copy(value = child)
-  protected[this] def nodeComputeType(scope: Map[Symbol, Type]) = CollectionType(CollectionTypeConstructor.default, child.nodeGetType(scope))
+  protected[this] def nodeComputeType(scope: Map[Symbol, Type]) =
+    CollectionType(CollectionTypeConstructor.default, child.nodeGetType(scope))
 }
 
 abstract class FilteredQuery extends Node with DefNode {
@@ -173,7 +179,11 @@ abstract class FilteredQuery extends Node with DefNode {
       if(args.isEmpty) n else (n + ' ' + args)
     case _ => super.toString
   }
-  protected[this] def nodeComputeType(scope: Map[Symbol, Type]) = from.nodeGetType(scope)
+  protected[this] def nodeComputeType(scope: Map[Symbol, Type]) = {
+    val fr = from
+    val genScope = scope + (generator -> fr.nodeGetType(scope).asCollectionType.elementType)
+    nodeChildren.foreach { ch => if(ch ne fr) ch.nodeGetType(genScope) }
+  }
 }
 
 object FilteredQuery {
@@ -276,7 +286,12 @@ final case class Join(leftGen: Symbol, rightGen: Symbol, left: Node, right: Node
     if((leftGen eq this.leftGen) && (rightGen eq this.rightGen) && (left eq this.left) && (right eq this.right) && (jt eq this.jt)) this
     else copy(leftGen = leftGen, rightGen = rightGen, left = left, right = right, jt = jt)
   }
-  protected[this] def nodeComputeType(scope: Map[Symbol, Type]) = ProductType(IndexedSeq(left.nodeGetType(scope), right.nodeGetType(scope)))
+  protected[this] def nodeComputeType(scope: Map[Symbol, Type]) = {
+    val lt = left.nodeGetType(scope)
+    val rt = right.nodeGetType(scope)
+    on.nodeGetType(scope + (leftGen -> lt.asCollectionType.elementType) + (rightGen -> rt.asCollectionType.elementType))
+    ProductType(IndexedSeq(lt, rt))
+  }
 }
 
 final case class Union(left: Node, right: Node, all: Boolean, leftGen: Symbol = new AnonSymbol, rightGen: Symbol = new AnonSymbol) extends BinaryNode with SimpleDefNode {
@@ -286,7 +301,10 @@ final case class Union(left: Node, right: Node, all: Boolean, leftGen: Symbol = 
   def nodeGenerators = Seq((leftGen, left), (rightGen, right))
   def nodeRebuildWithGenerators(gen: IndexedSeq[Symbol]) = copy(leftGen = gen(0), rightGen = gen(1))
   def nodePostGeneratorChildren = Seq.empty
-  protected[this] def nodeComputeType(scope: Map[Symbol, Type]) = right.nodeGetType(scope)
+  protected[this] def nodeComputeType(scope: Map[Symbol, Type]) = {
+    left.nodeGetType(scope)
+    right.nodeGetType(scope)
+  }
 }
 
 final case class Bind(generator: Symbol, from: Node, select: Node) extends BinaryNode with SimpleDefNode {
@@ -432,7 +450,10 @@ final case class RangeFrom(start: Long = 1L) extends NullaryNode with TypedNode 
 /** An if-then part of a Conditional node */
 final case class IfThen(val left: Node, val right: Node) extends BinaryNode {
   protected[this] def nodeRebuild(left: Node, right: Node): Node = copy(left = left, right = right)
-  protected[this] def nodeComputeType(scope: Map[Symbol, Type]) = right.nodeGetType(scope)
+  protected[this] def nodeComputeType(scope: Map[Symbol, Type]) = {
+    left.nodeGetType(scope)
+    right.nodeGetType(scope)
+  }
 }
 
 /** A conditional expression; all clauses should be IfThen nodes */
@@ -444,5 +465,8 @@ final case class ConditionalExpr(val clauses: IndexedSeq[Node], val elseClause: 
     if(e.ne(elseClause) || c.isDefined) ConditionalExpr(c.getOrElse(clauses), e)
     else this
   }
-  protected[this] def nodeComputeType(scope: Map[Symbol, Type]) = clauses.head.nodeGetType(scope)
+  protected[this] def nodeComputeType(scope: Map[Symbol, Type]) = {
+    nodeChildren.foreach(_.nodeGetType(scope))
+    clauses.head.nodeCurrentType
+  }
 }

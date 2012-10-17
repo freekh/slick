@@ -32,7 +32,10 @@ sealed trait Projection[T <: Product] extends ColumnBase[T] with ProductNode wit
 
   lazy val tpe = ProductType(productIterator.asInstanceOf[Iterator[Column[_]]].map(_.tpe).toIndexedSeq)
 
-  override protected[this] def nodeComputeType(scope: Map[Symbol, Type]) = tpe
+  override protected[this] def nodeComputeType(scope: Map[Symbol, Type]) = {
+    nodeChildren.foreach(_.nodeGetType(scope))
+    tpe
+  }
 }
 
 object Projection {
