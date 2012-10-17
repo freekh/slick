@@ -64,10 +64,11 @@ class DumpContext(val out: PrintWriter, val typed: Boolean = true) {
       case n: RefNode => n.nodeReferences.foreach(addRef)
       case _ =>
     }
-    val typeInfo = tree match {
-      case t: Typed if typed => " {" + t.tpe.toString + "}"
-      case _ => ""
+    val tpe = tree match {
+      case t: Typed => t.tpe
+      case t => t.nodeCurrentType
     }
+    val typeInfo = if(typed && tpe != NoType) " : " + tpe.toString else ""
     tree match {
       case Path(l @ (_ :: _ :: _)) =>
         // Print paths on a single line

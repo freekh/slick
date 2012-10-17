@@ -22,12 +22,16 @@ trait OptionType extends Type {
 }
 
 case class ProductType(elements: IndexedSeq[Type]) extends Type {
-  override def toString = "ProductType(" + elements.mkString(", ") + ")"
+  override def toString = "(" + elements.mkString(", ") + ")"
 }
 
-case class CollectionType(cons: CollectionTypeConstructor, elementType: Type) extends Type
+case class CollectionType(cons: CollectionTypeConstructor, elementType: Type) extends Type {
+  override def toString = cons + "[" + elementType + "]"
+}
 
-case class CollectionTypeConstructor(dummy: String = "")
+case class CollectionTypeConstructor(dummy: String = "") {
+  override def toString = "Coll"
+}
 
 object CollectionTypeConstructor {
   def default = new CollectionTypeConstructor
@@ -90,4 +94,11 @@ class TypeUtil(val tpe: Type) extends AnyVal {
 
 object TypeUtil {
   implicit def typeToTypeUtil(tpe: Type) = new TypeUtil(tpe)
+}
+
+trait SymbolScope {
+  def + (entry: (Symbol, Type)): SymbolScope
+  def get(sym: Symbol): Option[Type]
+  def computed(n: Node, tpe: Type): Unit
+  def withDefault(f: (Symbol => Type)): SymbolScope
 }

@@ -2,7 +2,7 @@ package scala.slick.lifted
 
 import scala.slick.driver.JdbcDriver
 import scala.slick.jdbc.{PositionedParameters, PositionedResult}
-import scala.slick.ast.{Node, UnaryNode, ProductNode, TypedType, MappedScalaType, Scope, ProductType, TypedNode, Type, Symbol}
+import scala.slick.ast._
 
 sealed trait Projection[T <: Product] extends ColumnBase[T] with ProductNode with Product with TypedNode {
   type V = T
@@ -32,7 +32,7 @@ sealed trait Projection[T <: Product] extends ColumnBase[T] with ProductNode wit
 
   lazy val tpe = ProductType(productIterator.asInstanceOf[Iterator[Column[_]]].map(_.tpe).toIndexedSeq)
 
-  override protected[this] def nodeComputeType(scope: Map[Symbol, Type]) = {
+  override protected[this] def nodeComputeType(scope: SymbolScope) = {
     nodeChildren.foreach(_.nodeGetType(scope))
     tpe
   }

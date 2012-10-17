@@ -58,7 +58,7 @@ case class Comprehension(from: Seq[(Symbol, Node)] = Seq.empty, where: Seq[Node]
       )
     else this
   }
-  protected[this] def nodeComputeType(scope: Map[Symbol, Type]) = {
+  protected[this] def nodeComputeType(scope: SymbolScope) = {
     // Assign types to all "from" Nodes and compute the resulting scope
     val genScope = from.foldLeft(scope) { case (sc, (s, n)) =>
       sc + (s -> n.nodeGetType(sc).asCollectionType.elementType)
@@ -85,7 +85,7 @@ final case class RowNumber(by: Seq[(Node, Ordering)] = Seq.empty) extends Simple
     copy(by = by.zip(ch).map{ case ((_, o), n) => (n, o) })
   override def nodeChildNames = by.zipWithIndex.map("by" + _._2)
   override def toString = "RowNumber"
-  protected[this] def nodeComputeType(scope: Map[Symbol, Type]) = {
+  protected[this] def nodeComputeType(scope: SymbolScope) = {
     by.foreach(_._1.nodeGetType(scope))
     NoType
   }

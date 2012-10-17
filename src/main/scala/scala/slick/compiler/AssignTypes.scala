@@ -7,15 +7,16 @@ import Util.nodeToNodeOps
 class AssignTypes extends Phase {
   val name = "assignTypes"
 
+  class LoggingSymbolScope(val m: Map[Symbol, Type]) extends SymbolScope {
+    def + (entry: (Symbol, Type)) = new LoggingSymbolScope(m + entry)
+    def get(sym: Symbol): Option[Type] = m.get(sym)
+    def computed(n: Node, tpe: Type): Unit =
+      logger.debug("Assigned type "+tpe+" to node "+n)
+    def withDefault(f: (Symbol => Type)) = new LoggingSymbolScope(m.withDefault(f))
+  }
+
   def apply(tree: Node, state: CompilationState): Node = {
-    def tr(n: Node, scope: Map[Symbol, Type], f: (Node, Map[Symbol, Type]) => Node): Node = {
-      val n2 = n.mapChildrenWithScope({ (_, ch, chscope) => tr(ch, chscope, f) }, scope)
-      f(n2, scope)
-    }
-    tr(tree, Map.empty[Symbol, Type], { (n, sc) =>
-      n.nodeGetType(sc)
-      logger.debug("Assigned type "+n.nodeCurrentType+" to "+n)
-      n
-    })
+    tree.nodeGetType(new LoggingSymbolScope(Map.empty))
+    tree
   }
 }
