@@ -3,8 +3,8 @@ package scala.slick.ast
 import scala.slick.SlickException
 import slick.lifted.ShapedValue
 import scala.slick.util.SimpleTypeName
-import scala.collection.mutable.ArrayBuffer
 import TypeUtil.typeToTypeUtil
+import Util._
 
 trait NodeGenerator {
   def nodeDelegate: Node
@@ -17,20 +17,12 @@ trait Node extends NodeGenerator {
   def nodeChildren: Seq[Node]
   def nodeChildNames: Iterable[String] = Stream.from(0).map(_.toString)
 
-  def nodeMapChildren(f: Node => Node): Node
+  protected[this] def nodeRebuild(ch: IndexedSeq[Node]): Node
+
+  final def nodeMapChildren(f: Node => Node): Node =
+    mapOrNone(nodeChildren, f).map(nodeRebuild).getOrElse(this)
 
   def nodeDelegate: Node = this
-
-  protected[this] final def nodeMapNodes(s: Iterable[Node], f: Node => Node): Option[IndexedSeq[Node]] = {
-    var change = false
-    val b = new ArrayBuffer[Node]
-    for(n <- s) {
-      val nn = f(n)
-      b append nn
-      if(nn ne n) change = true
-    }
-    if(change) Some(b) else None
-  }
 
   override def toString = this match {
     case p: Product =>
@@ -41,7 +33,7 @@ trait Node extends NodeGenerator {
     case _ => super.toString
   }
 
-  def nodeIntrinsicSymbol = new IntrinsicSymbol(this)
+  final def nodeIntrinsicSymbol = new IntrinsicSymbol(this)
 
   // Type information
   private[this] var nodeType: Type = NoType
@@ -70,13 +62,6 @@ object Node {
     else throw new SlickException("Cannot narrow "+o+" of type "+SimpleTypeName.forVal(o)+" to a Node")
 }
 
-trait SimpleNode extends Node {
-  protected[this] def nodeRebuild(ch: IndexedSeq[Node]): Node
-
-  def nodeMapChildren(f: Node => Node): Node =
-    nodeMapNodes(nodeChildren, f).map(nodeRebuild).getOrElse(this)
-}
-
 trait TypedNode extends Node with Typed {
   protected[this] def nodeComputeType(scope: SymbolScope) = {
     nodeChildren.foreach(_.nodeGetType(scope))
@@ -84,7 +69,7 @@ trait TypedNode extends Node with Typed {
   }
 }
 
-trait ProductNode extends SimpleNode {
+trait ProductNode extends Node {
   override def toString = "ProductNode"
   protected[this] def nodeRebuild(ch: IndexedSeq[Node]): Node = new ProductNode {
     val nodeChildren = ch
@@ -105,7 +90,7 @@ object ProductNode {
   def unapply(p: ProductNode) = Some(p.nodeChildren)
 }
 
-final case class StructNode(elements: IndexedSeq[(Symbol, Node)]) extends ProductNode with SimpleDefNode {
+final case class StructNode(elements: IndexedSeq[(Symbol, Node)]) extends ProductNode with DefNode {
   override def toString = "StructNode"
   override def nodeChildNames = elements.map(_._1.toString)
   val nodeChildren = elements.map(_._2)
@@ -117,8 +102,8 @@ final case class StructNode(elements: IndexedSeq[(Symbol, Node)]) extends Produc
     case _ => false
   }
   def nodeGenerators = elements
-  def nodePostGeneratorChildren = Seq.empty
-  def nodeRebuildWithGenerators(gen: IndexedSeq[Symbol]): Node =
+  override def nodePostGeneratorChildren = Seq.empty // for efficiency
+  protected[this] def nodeRebuildWithGenerators(gen: IndexedSeq[Symbol]): Node =
     copy(elements = (elements, gen).zipped.map((e, s) => (s, e._2)))
 }
 
@@ -135,7 +120,7 @@ object LiteralNode {
   def unapply(n: LiteralNode): Option[Any] = Some(n.value)
 }
 
-trait BinaryNode extends SimpleNode {
+trait BinaryNode extends Node {
   def left: Node
   def right: Node
   lazy val nodeChildren = Seq(left, right)
@@ -143,14 +128,14 @@ trait BinaryNode extends SimpleNode {
   protected[this] def nodeRebuild(left: Node, right: Node): Node
 }
 
-trait UnaryNode extends SimpleNode {
+trait UnaryNode extends Node {
   def child: Node
   lazy val nodeChildren = Seq(child)
   protected[this] final def nodeRebuild(ch: IndexedSeq[Node]): Node = nodeRebuild(ch(0))
   protected[this] def nodeRebuild(child: Node): Node
 }
 
-trait NullaryNode extends SimpleNode {
+trait NullaryNode extends Node {
   val nodeChildren = Nil
   protected[this] final def nodeRebuild(ch: IndexedSeq[Node]): Node = this
 }
@@ -163,7 +148,7 @@ final case class Pure(value: Node) extends UnaryNode {
     CollectionType(CollectionTypeConstructor.default, child.nodeGetType(scope))
 }
 
-abstract class FilteredQuery extends Node with DefNode {
+abstract class FilteredQuery extends DefNode {
   def generator: Symbol
   def from: Node
   def nodeGenerators = Seq((generator, from))
@@ -195,7 +180,7 @@ object FilteredQuery {
   def unapply(f: FilteredQuery) = Some((f.generator, f.from))
 }
 
-final case class Filter(generator: Symbol, from: Node, where: Node) extends FilteredQuery with BinaryNode with SimpleDefNode {
+final case class Filter(generator: Symbol, from: Node, where: Node) extends FilteredQuery with BinaryNode {
   def left = from
   def right = where
   override def nodeChildNames = Seq("from "+generator, "where")
@@ -203,27 +188,24 @@ final case class Filter(generator: Symbol, from: Node, where: Node) extends Filt
   override def nodeDelegate =
     if(where match { case LiteralNode(true) => true; case _ => false }) left
     else super.nodeDelegate
-  def nodeRebuildWithGenerators(gen: IndexedSeq[Symbol]) = copy(generator = gen(0))
-  def nodePostGeneratorChildren = Seq(where)
+  protected[this] def nodeRebuildWithGenerators(gen: IndexedSeq[Symbol]) = copy(generator = gen(0))
 }
 
-final case class SortBy(generator: Symbol, from: Node, by: Seq[(Node, Ordering)]) extends FilteredQuery with SimpleNode with SimpleDefNode {
+final case class SortBy(generator: Symbol, from: Node, by: Seq[(Node, Ordering)]) extends FilteredQuery {
   lazy val nodeChildren = from +: by.map(_._1)
   protected[this] def nodeRebuild(ch: IndexedSeq[Node]) =
     copy(from = ch(0), by = by.zip(ch.tail).map{ case ((_, o), n) => (n, o) })
   override def nodeChildNames = ("from "+generator) +: by.zipWithIndex.map("by" + _._2)
-  def nodeRebuildWithGenerators(gen: IndexedSeq[Symbol]) = copy(generator = gen(0))
-  def nodePostGeneratorChildren = by.map(_._1)
+  protected[this] def nodeRebuildWithGenerators(gen: IndexedSeq[Symbol]) = copy(generator = gen(0))
   override def toString = "SortBy " + by.map(_._2).mkString(", ")
 }
 
-final case class OrderBy(generator: Symbol, from: Node, by: Seq[(Node, Ordering)]) extends FilteredQuery with SimpleNode with SimpleDefNode {
+final case class OrderBy(generator: Symbol, from: Node, by: Seq[(Node, Ordering)]) extends FilteredQuery {
   lazy val nodeChildren = from +: by.map(_._1)
   protected[this] def nodeRebuild(ch: IndexedSeq[Node]) =
     copy(from = ch(0), by = by.zip(ch.tail).map{ case ((_, o), n) => (n, o) })
   override def nodeChildNames = ("from "+generator) +: by.zipWithIndex.map("by" + _._2)
-  def nodeRebuildWithGenerators(gen: IndexedSeq[Symbol]) = copy(generator = gen(0))
-  def nodePostGeneratorChildren = by.map(_._1)
+  protected[this] def nodeRebuildWithGenerators(gen: IndexedSeq[Symbol]) = copy(generator = gen(0))
 }
 
 final case class Ordering(direction: Ordering.Direction = Ordering.Asc, nulls: Ordering.NullOrdering = Ordering.NullsDefault) {
@@ -246,13 +228,12 @@ object Ordering {
   final case object Desc extends Direction(true) { def reverse = Asc }
 }
 
-final case class GroupBy(fromGen: Symbol, byGen: Symbol, from: Node, by: Node) extends BinaryNode with SimpleDefNode {
+final case class GroupBy(fromGen: Symbol, byGen: Symbol, from: Node, by: Node) extends BinaryNode with DefNode {
   def left = from
   def right = by
   override def nodeChildNames = Seq("from "+fromGen, "by "+byGen)
   protected[this] def nodeRebuild(left: Node, right: Node) = copy(from = left, by = right)
-  def nodeRebuildWithGenerators(gen: IndexedSeq[Symbol]) = copy(fromGen = gen(0), byGen = gen(1))
-  def nodePostGeneratorChildren = Nil
+  protected[this] def nodeRebuildWithGenerators(gen: IndexedSeq[Symbol]) = copy(fromGen = gen(0), byGen = gen(1))
   def nodeGenerators = Seq((fromGen, from), (byGen, by))
   override def toString = "GroupBy"
   protected[this] def nodeComputeType(scope: SymbolScope) = {
@@ -263,30 +244,27 @@ final case class GroupBy(fromGen: Symbol, byGen: Symbol, from: Node, by: Node) e
   }
 }
 
-final case class Take(from: Node, num: Int, generator: Symbol = new AnonSymbol) extends FilteredQuery with UnaryNode with SimpleDefNode {
+final case class Take(from: Node, num: Int, generator: Symbol = new AnonSymbol) extends FilteredQuery with UnaryNode {
   def child = from
   override def nodeChildNames = Seq("from "+generator)
   protected[this] def nodeRebuild(child: Node) = copy(from = child)
-  def nodeRebuildWithGenerators(gen: IndexedSeq[Symbol]) = copy(generator = gen(0))
-  def nodePostGeneratorChildren = Seq.empty
+  protected[this] def nodeRebuildWithGenerators(gen: IndexedSeq[Symbol]) = copy(generator = gen(0))
 }
 
-final case class Drop(from: Node, num: Int, generator: Symbol = new AnonSymbol) extends FilteredQuery with UnaryNode with SimpleDefNode {
+final case class Drop(from: Node, num: Int, generator: Symbol = new AnonSymbol) extends FilteredQuery with UnaryNode {
   def child = from
   override def nodeChildNames = Seq("from "+generator)
   protected[this] def nodeRebuild(child: Node) = copy(from = child)
-  def nodeRebuildWithGenerators(gen: IndexedSeq[Symbol]) = copy(generator = gen(0))
-  def nodePostGeneratorChildren = Seq.empty
+  protected[this] def nodeRebuildWithGenerators(gen: IndexedSeq[Symbol]) = copy(generator = gen(0))
 }
 
-final case class Join(leftGen: Symbol, rightGen: Symbol, left: Node, right: Node, jt: JoinType, on: Node) extends SimpleNode with SimpleDefNode {
+final case class Join(leftGen: Symbol, rightGen: Symbol, left: Node, right: Node, jt: JoinType, on: Node) extends DefNode {
   lazy val nodeChildren = IndexedSeq(left, right, on)
   protected[this] def nodeRebuild(ch: IndexedSeq[Node]) = copy(left = ch(0), right = ch(1), on = ch(2))
   override def nodeChildNames = Seq("left "+leftGen, "right "+rightGen, "on")
   override def toString = "Join " + jt.sqlName
   def nodeGenerators = Seq((leftGen, left), (rightGen, right))
-  def nodeRebuildWithGenerators(gen: IndexedSeq[Symbol]) = copy(leftGen = gen(0), rightGen = gen(1))
-  def nodePostGeneratorChildren = Seq(on)
+  protected[this] def nodeRebuildWithGenerators(gen: IndexedSeq[Symbol]) = copy(leftGen = gen(0), rightGen = gen(1))
   def nodeCopyJoin(leftGen: Symbol = leftGen, rightGen: Symbol = rightGen, left: Node = left, right: Node = right, jt: JoinType = jt) = {
     if((leftGen eq this.leftGen) && (rightGen eq this.rightGen) && (left eq this.left) && (right eq this.right) && (jt eq this.jt)) this
     else copy(leftGen = leftGen, rightGen = rightGen, left = left, right = right, jt = jt)
@@ -299,28 +277,26 @@ final case class Join(leftGen: Symbol, rightGen: Symbol, left: Node, right: Node
   }
 }
 
-final case class Union(left: Node, right: Node, all: Boolean, leftGen: Symbol = new AnonSymbol, rightGen: Symbol = new AnonSymbol) extends BinaryNode with SimpleDefNode {
+final case class Union(left: Node, right: Node, all: Boolean, leftGen: Symbol = new AnonSymbol, rightGen: Symbol = new AnonSymbol) extends BinaryNode with DefNode {
   protected[this] def nodeRebuild(left: Node, right: Node) = copy(left = left, right = right)
   override def toString = if(all) "Union all" else "Union"
   override def nodeChildNames = Seq("left "+leftGen, "right "+rightGen)
   def nodeGenerators = Seq((leftGen, left), (rightGen, right))
-  def nodeRebuildWithGenerators(gen: IndexedSeq[Symbol]) = copy(leftGen = gen(0), rightGen = gen(1))
-  def nodePostGeneratorChildren = Seq.empty
+  protected[this] def nodeRebuildWithGenerators(gen: IndexedSeq[Symbol]) = copy(leftGen = gen(0), rightGen = gen(1))
   protected[this] def nodeComputeType(scope: SymbolScope) = {
     left.nodeGetType(scope)
     right.nodeGetType(scope)
   }
 }
 
-final case class Bind(generator: Symbol, from: Node, select: Node) extends BinaryNode with SimpleDefNode {
+final case class Bind(generator: Symbol, from: Node, select: Node) extends BinaryNode with DefNode {
   def left = from
   def right = select
   override def nodeChildNames = Seq("from "+generator, "select")
   protected[this] def nodeRebuild(left: Node, right: Node) = copy(from = left, select = right)
   def nodeGenerators = Seq((generator, from))
   override def toString = "Bind"
-  def nodeRebuildWithGenerators(gen: IndexedSeq[Symbol]) = copy(generator = gen(0))
-  def nodePostGeneratorChildren = Seq(select)
+  protected[this] def nodeRebuildWithGenerators(gen: IndexedSeq[Symbol]) = copy(generator = gen(0))
   protected[this] def nodeComputeType(scope: SymbolScope) = {
     val fromType = from.nodeGetType(scope).asCollectionType
     val selType = select.nodeGetType(scope + (generator -> fromType.elementType))
@@ -328,33 +304,31 @@ final case class Bind(generator: Symbol, from: Node, select: Node) extends Binar
   }
 }
 
-final case class TableExpansion(generator: Symbol, table: Node, columns: Node) extends BinaryNode with SimpleDefNode {
+final case class TableExpansion(generator: Symbol, table: Node, columns: Node) extends BinaryNode with DefNode {
   def left = table
   def right = columns
   override def nodeChildNames = Seq("table "+generator, "columns")
   protected[this] def nodeRebuild(left: Node, right: Node) = copy(table = left, columns = right)
   def nodeGenerators = Seq((generator, table))
   override def toString = "TableExpansion"
-  def nodeRebuildWithGenerators(gen: IndexedSeq[Symbol]) = copy(generator = gen(0))
-  def nodePostGeneratorChildren = Seq(columns)
+  protected[this] def nodeRebuildWithGenerators(gen: IndexedSeq[Symbol]) = copy(generator = gen(0))
   protected[this] def nodeComputeType(scope: SymbolScope) =
     columns.nodeGetType(scope + (generator -> table.nodeGetType(scope)))
 }
 
-final case class TableRefExpansion(marker: Symbol, ref: Node, columns: Node) extends BinaryNode with SimpleDefNode {
+final case class TableRefExpansion(marker: Symbol, ref: Node, columns: Node) extends BinaryNode with DefNode {
   def left = ref
   def right = columns
   override def nodeChildNames = Seq("ref", "columns")
   protected[this] def nodeRebuild(left: Node, right: Node) = copy(ref = left, columns = right)
   def nodeGenerators = Seq((marker, ref))
   override def toString = "TableRefExpansion "+marker
-  def nodeRebuildWithGenerators(gen: IndexedSeq[Symbol]) = copy(marker = gen(0))
-  def nodePostGeneratorChildren = Seq(columns)
+  protected[this] def nodeRebuildWithGenerators(gen: IndexedSeq[Symbol]) = copy(marker = gen(0))
   protected[this] def nodeComputeType(scope: SymbolScope) =
     columns.nodeGetType(scope + (marker -> ref.nodeGetType(scope)))
 }
 
-final case class Select(in: Node, field: Symbol) extends UnaryNode with SimpleRefNode {
+final case class Select(in: Node, field: Symbol) extends UnaryNode with RefNode {
   if(in.isInstanceOf[TableNode])
     throw new SlickException("Select(TableNode, \""+field+"\") found. This is "+
       "typically caused by an attempt to use a \"raw\" table object directly "+
@@ -362,8 +336,8 @@ final case class Select(in: Node, field: Symbol) extends UnaryNode with SimpleRe
   def child = in
   override def nodeChildNames = Seq("in")
   protected[this] def nodeRebuild(child: Node) = copy(in = child)
-  def nodeReferences: Seq[Symbol] = Seq(field)
-  def nodeRebuildWithReferences(gen: IndexedSeq[Symbol]) = copy(field = gen(0))
+  def nodeReference = field
+  protected[this] def nodeRebuildWithReference(s: Symbol) = copy(field = s)
   override def toString = Path.unapply(this) match {
     case Some(l) => super.toString + " for " + Path.toString(l)
     case None => super.toString
@@ -371,18 +345,18 @@ final case class Select(in: Node, field: Symbol) extends UnaryNode with SimpleRe
   protected[this] def nodeComputeType(scope: SymbolScope) = Type.select(in.nodeGetType(scope), field)
 }
 
-case class Apply(sym: Symbol, children: Seq[Node])(val tpe: Type) extends SimpleNode with SimpleRefNode with TypedNode {
+case class Apply(sym: Symbol, children: Seq[Node])(val tpe: Type) extends RefNode with TypedNode {
   def nodeChildren = children
   protected[this] def nodeRebuild(ch: IndexedSeq[scala.slick.ast.Node]) = copy(children = ch)(tpe)
-  def nodeReferences: Seq[Symbol] = Seq(sym)
-  def nodeRebuildWithReferences(syms: IndexedSeq[Symbol]) = copy(sym = syms(0))(tpe)
+  def nodeReference = sym
+  protected[this] def nodeRebuildWithReference(s: Symbol) = copy(sym = s)(tpe)
   override def toString = "Apply "+sym
 }
 
 /** A reference to a Symbol */
-case class Ref(sym: Symbol) extends NullaryNode with SimpleRefNode {
-  def nodeReferences = Seq(sym)
-  def nodeRebuildWithReferences(gen: IndexedSeq[Symbol]) = copy(sym = gen(0))
+case class Ref(sym: Symbol) extends NullaryNode with RefNode {
+  def nodeReference = sym
+  protected[this] def nodeRebuildWithReference(s: Symbol) = copy(sym = s)
   protected[this] def nodeComputeType(scope: SymbolScope) = scope.get(sym) match {
     case Some(t) => t
     case _ => throw new SlickException("No type for symbol "+sym+" found for "+this)
@@ -418,14 +392,13 @@ object TableNode {
   def unapply(t: TableNode) = Some(t.tableName)
 }
 
-final case class LetDynamic(defs: Seq[(Symbol, Node)], in: Node) extends SimpleNode with SimpleDefNode {
+final case class LetDynamic(defs: Seq[(Symbol, Node)], in: Node) extends DefNode {
   val nodeChildren = defs.map(_._2) :+ in
   protected[this] def nodeRebuild(ch: IndexedSeq[Node]) =
     copy(defs = defs.zip(ch.init).map{ case ((s, _), n) => (s, n) }, in = ch.last)
   override def nodeChildNames = defs.map("let " + _._1.toString) :+ "in"
   def nodeGenerators = defs
-  def nodePostGeneratorChildren = Seq(in)
-  def nodeRebuildWithGenerators(gen: IndexedSeq[Symbol]): Node =
+  protected[this] def nodeRebuildWithGenerators(gen: IndexedSeq[Symbol]): Node =
     copy(defs = (defs, gen).zipped.map((e, s) => (s, e._2)))
   override def toString = "LetDynamic"
   protected[this] def nodeComputeType(scope: SymbolScope) = {
@@ -464,12 +437,8 @@ final case class IfThen(val left: Node, val right: Node) extends BinaryNode {
 /** A conditional expression; all clauses should be IfThen nodes */
 final case class ConditionalExpr(val clauses: IndexedSeq[Node], val elseClause: Node) extends Node {
   val nodeChildren = elseClause +: clauses
-  def nodeMapChildren(f: Node => Node): Node = {
-    val e = f(elseClause)
-    val c = nodeMapNodes(clauses, f)
-    if(e.ne(elseClause) || c.isDefined) ConditionalExpr(c.getOrElse(clauses), e)
-    else this
-  }
+  protected[this] def nodeRebuild(ch: IndexedSeq[Node]) =
+    copy(clauses = ch.tail, elseClause = ch.head)
   protected[this] def nodeComputeType(scope: SymbolScope) = {
     nodeChildren.foreach(_.nodeGetType(scope))
     clauses.head.nodeCurrentType
